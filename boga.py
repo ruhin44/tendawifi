@@ -1,7 +1,6 @@
-
 #!/usr/bin/env python3
 """
-Tenda AC15 Router Automation & Telegram Bot Controller
+Tenda AC15 Router Automation & Telegram Bot Controller (New Firmware Compatible)
 Target Environment: Render.com Web Service (Direct Public Dynamic DNS URL)
 """
 
@@ -9,7 +8,6 @@ import sys
 import os
 import time
 import json
-import hashlib
 import logging
 import threading
 import urllib.request
@@ -26,9 +24,10 @@ ROUTER_PASSWORD = "admin11"
 TELEGRAM_BOT_TOKEN = "8820740325:AAGeSShZeaG2eTriYQMV__QkE5GYxsM9dSY"
 PORT = int(os.environ.get("PORT", 10000))
 
+URL_HOME_INFO = f"{ROUTER_BASE_URL}/goform/getHomePageInfo?modules=loginAuth%2CwifiRelay"
 URL_LOGIN = f"{ROUTER_BASE_URL}/login/Auth"
 URL_DEVICES = f"{ROUTER_BASE_URL}/goform/getOnlineList"
-URL_STATUS = f"{ROUTER_BASE_URL}/goform/GetRouterStatus"
+URL_STATUS = f"{ROUTER_BASE_URL}/goform/getStatus?modules=internetStatus%2CdeviceStatistics%2CsystemInfo%2CwanAdvCfg%2CwifiRelay"
 URL_REBOOT = f"{ROUTER_BASE_URL}/goform/SysToolReboot"
 
 # Setup Logging
@@ -59,7 +58,7 @@ def run_web_server():
         logging.error(f"Web server error: {e}")
 
 # ==============================================================================
-# TENDA ROUTER CLIENT
+# TENDA ROUTER CLIENT (NEW FIRMWARE COMPATIBLE)
 # ==============================================================================
 class TendaRouter:
     def __init__(self, base_url, password):
@@ -69,7 +68,7 @@ class TendaRouter:
         self.cookie_jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
 
-    def _get_base_headers(self, referer_page="login.html"):
+    def _get_base_headers(self, referer_page="index.html"):
         return {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -79,11 +78,19 @@ class TendaRouter:
         }
 
     def login(self) -> bool:
-        md5_pass = hashlib.md5(self.password.encode("utf-8")).hexdigest()
-        logging.info(f"Authenticating with Tenda AC15 at {self.base_url}...")
+        logging.info(f"Authenticating with Tenda AC15 at {self.base_url} (New Firmware Flow)...")
 
+        # ধাপ ১: প্রথমে হোম পেজ ইনফো বা লগইন অথ এপিআই হিট করে সেশন ইনিশিয়ালাইজ করা
+        try:
+            req_home = urllib.request.Request(URL_HOME_INFO, headers=self._get_base_headers("index.html"))
+            with self.opener.open(req_home, timeout=10) as resp:
+                pass
+        except Exception as e:
+            logging.warning(f"Pre-login info fetch warning: {e}")
+
+        # ধাপ ২: পাসওয়ার্ড সাবমিট করা
         payload_data = urllib.parse.urlencode({"password": self.password}).encode("utf-8")
-        headers = self._get_base_headers("login.html")
+        headers = self._get_base_headers("index.html")
         headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
 
         req = urllib.request.Request(URL_LOGIN, data=payload_data, headers=headers, method="POST")
@@ -93,12 +100,13 @@ class TendaRouter:
                 for cookie in self.cookie_jar:
                     if cookie.name:
                         self.auth_cookie_str = f"{cookie.name}={cookie.value}"
+                        logging.info(f"Successfully authenticated! Cookie: {self.auth_cookie_str}")
                         return True
         except Exception as e:
             logging.error(f"Login error: {e}")
 
-        # ফলব্যাক কুকি
-        self.auth_cookie_str = f"password={md5_pass}; admin=1"
+        # ফলব্যাক কুকি যদি সরাসরি না ধরে
+        self.auth_cookie_str = "admin=1"
         return True
 
     def request_api(self, url: str, method: str = "GET", post_data: bytes = None, retry: bool = True):
@@ -106,10 +114,12 @@ class TendaRouter:
             self.login()
 
         request_url = url
-        if method == "GET":
-            request_url = f"{url}?_={int(time.time() * 1000)}"
+        if method == "GET" and "?" not in url:
+            request_url = f"{url}&_={int(time.time() * 1000)}"
+        elif method == "GET":
+            request_url = f"{url}&_={int(time.time() * 1000)}"
 
-        headers = self._get_base_headers("main.html")
+        headers = self._get_base_headers("index.html")
         if post_data:
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         if self.auth_cookie_str:
@@ -221,9 +231,11 @@ class TelegramBot:
                 return
 
             lines = ["📊 <b>Tenda AC15 Live Status</b>\n"]
-            for k, v in list(status.items())[:15]:
-                if isinstance(v, (str, int, float)) and v != "":
-                    lines.append(f"• <b>{html_escape(k)}:</b> <code>{html_escape(v)}</code>")
+            for section_key, section_val in status.items():
+                if isinstance(section_val, dict):
+                    for k, v in list(section_val.items())[:5]:
+                        if isinstance(v, (str, int, float)) and v != "":
+                            lines.append(f"• <b>{html_escape(k)}:</b> <code>{html_escape(v)}</code>")
 
             self.send_message(chat_id, "\n".join(lines))
 
@@ -266,7 +278,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
