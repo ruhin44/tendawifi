@@ -1,1 +1,2 @@
 
+# Pure Python standard library implementation - no external packages needed
